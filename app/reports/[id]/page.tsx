@@ -13,6 +13,7 @@ import {
 export default function ReportDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const [report, setReport] = useState<SavedServeReport | null>(null);
   const [error, setError] = useState("");
+  const [shareMessage, setShareMessage] = useState("");
   const [playingSnapshotKey, setPlayingSnapshotKey] = useState<string | null>(null);
   const playbackTimersRef = useRef<number[]>([]);
 
@@ -119,6 +120,15 @@ export default function ReportDetailPage({ params }: { params: Promise<{ id: str
     playbackTimersRef.current = [];
   }
 
+  async function shareReport() {
+    try {
+      await copyTextToClipboard(window.location.href);
+      setShareMessage("분석 결과 링크를 복사했습니다.");
+    } catch (shareError) {
+      setShareMessage(shareError instanceof Error ? shareError.message : "링크 복사에 실패했습니다.");
+    }
+  }
+
   if (error) {
     return (
       <main className="app-shell">
@@ -171,7 +181,12 @@ export default function ReportDetailPage({ params }: { params: Promise<{ id: str
               {report.aiReport ? <p className="report-meta-pill">신뢰도: {formatConfidence(report.aiReport.confidence)}</p> : null}
             </div>
           </div>
+          <button className="share-action" type="button" onClick={shareReport}>
+            공유하기
+          </button>
         </div>
+
+        {shareMessage ? <p className="share-message">{shareMessage}</p> : null}
 
         <div className="coach-dashboard">
           <div className="priority-card">
@@ -289,4 +304,30 @@ function getConfidenceLabel(confidence: unknown) {
 
 function normalizeConfidenceValue(confidence: unknown) {
   return typeof confidence === "number" && Number.isFinite(confidence) ? Math.max(0, Math.min(confidence, 1)) : 0.7;
+}
+
+async function copyTextToClipboard(text: string) {
+  try {
+    await navigator.clipboard?.writeText(text);
+    return;
+  } catch {
+    // Fallback below for browsers that block async clipboard calls.
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.left = "-9999px";
+  textarea.style.position = "fixed";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+
+  const copied = document.execCommand("copy");
+  textarea.remove();
+
+  if (!copied) {
+    throw new Error("링크 복사에 실패했습니다. 주소창의 링크를 직접 복사해주세요.");
+  }
 }

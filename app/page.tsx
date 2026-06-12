@@ -458,12 +458,8 @@ export default function Home() {
 
       window.history.replaceState(null, "", url.toString());
 
-      if (navigator.clipboard) {
-        await navigator.clipboard.writeText(url.toString());
-        setShareMessage("분석 결과 링크를 복사했습니다.");
-      } else {
-        setShareMessage("분석 결과가 저장되었습니다. 주소창의 링크로 다시 열 수 있습니다.");
-      }
+      await copyTextToClipboard(url.toString());
+      setShareMessage("분석 결과 링크를 복사했습니다.");
     } catch (saveError) {
       setShareMessage(
         saveError instanceof Error
@@ -1097,10 +1093,40 @@ function loadImage(src: string) {
   });
 }
 
+async function copyTextToClipboard(text: string) {
+  try {
+    await navigator.clipboard?.writeText(text);
+    return;
+  } catch {
+    // Fallback below for browsers that block async clipboard after saving.
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.left = "-9999px";
+  textarea.style.position = "fixed";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+
+  const copied = document.execCommand("copy");
+  textarea.remove();
+
+  if (!copied) {
+    throw new Error("링크 복사에 실패했습니다. 주소창의 링크를 직접 복사해주세요.");
+  }
+}
+
 async function precheckServeVideo(video: HTMLVideoElement, duration: number, angle: CameraAngle) {
   const landmarker = await withTimeout(createPoseLandmarker(3), 6000).catch(() => null);
 
   if (!landmarker) {
+    if (isMobileLikeBrowser()) {
+      return createSkippedPrecheck(angle);
+    }
+
     return {
       valid: false,
       usableFrameCount: 0,
@@ -1136,6 +1162,10 @@ async function precheckServeVideo(video: HTMLVideoElement, duration: number, ang
     }
 
     const result = assessServeVideoCandidate(samples, angle);
+
+    if (!result.valid && isMobileLikeBrowser() && samples.length === 0) {
+      return createSkippedPrecheck(angle);
+    }
 
     return {
       ...result,
