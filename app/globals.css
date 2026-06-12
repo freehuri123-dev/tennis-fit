@@ -481,6 +481,18 @@ figcaption span,
   cursor: wait;
 }
 
+.video-ready-hint {
+  background: #f5fbf7;
+  border: 1px solid #cfe3d8;
+  border-radius: 8px;
+  color: var(--court-dark);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.45;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+}
+
 .analysis-overlay {
   align-items: center;
   background: rgba(9, 20, 17, 0.76);

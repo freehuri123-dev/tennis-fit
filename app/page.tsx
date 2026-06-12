@@ -2,6 +2,8 @@
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
+  assessServeVideoCandidate,
+  buildPoseSampleTimes,
   isUsablePoseSample,
   serveFocusAreas,
   type PoseLandmarkPoint,
@@ -185,6 +187,7 @@ export default function Home() {
     description: aiReport?.summary ?? "현재 리듬을 유지하며 확인해보세요.",
   };
   const representativeSnapshots = buildRepresentativeSnapshots(analyses);
+  const needsMobileVideoActivation = Boolean(videoUrl && !isVideoReady && isMobileLikeBrowser());
 
   useEffect(() => {
     if (!isAnalyzing && analyses.length > 0) {
@@ -319,9 +322,17 @@ export default function Home() {
     const restoreConsoleError = installMediaPipeConsoleNoiseFilter();
 
     try {
-      const metadataReady = await ensureMetadata(video).then(() => true).catch(() => false);
-      const duration = metadataReady && Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 20;
-      const precheck = createSkippedPrecheck();
+      await ensureMetadata(video);
+      const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 20;
+      const precheck = await precheckServeVideo(video, duration, angle);
+
+      if (!precheck.valid) {
+        setAnalyses([]);
+        setAiReport(null);
+        setAnalysisFailed(true);
+        setError(formatPrecheckError(precheck));
+        return;
+      }
 
       const report = await requestAiServeAnalysis(videoFile, angle, serveType, duration, {
         usableFrameCount: precheck.usableFrameCount,
@@ -404,6 +415,12 @@ export default function Home() {
   async function requestAnalysisConfirmation() {
     if (!videoRef.current || !videoUrl || !videoFile) {
       setError("먼저 서브 영상을 올려주세요.");
+      setAnalysisFailed(false);
+      return;
+    }
+
+    if (!isVideoReady && isMobileLikeBrowser()) {
+      setError("모바일에서는 영상 미리보기를 한 번 재생한 뒤 분석해주세요.");
       setAnalysisFailed(false);
       return;
     }
@@ -617,6 +634,10 @@ export default function Home() {
             </button>
           </div>
 
+          {needsMobileVideoActivation ? (
+            <p className="video-ready-hint">모바일에서는 영상 미리보기를 한 번 재생한 뒤 분석할 수 있습니다.</p>
+          ) : null}
+
           {error ? <p className="error-text">{error}</p> : null}
         </div>
 
@@ -631,6 +652,8 @@ export default function Home() {
               onCanPlay={() => setIsVideoReady(true)}
               onLoadedData={() => setIsVideoReady(true)}
               onLoadedMetadata={() => setIsVideoReady(true)}
+              onPlay={() => setIsVideoReady(true)}
+              onPlaying={() => setIsVideoReady(true)}
             />
           ) : (
             <div className="empty-preview">
@@ -854,16 +877,66 @@ async function requestAiServeAnalysis(
   return (await response.json()) as GeminiServeReport;
 }
 
-function createSkippedPrecheck() {
-  return {
-    valid: true,
-    usableFrameCount: 0,
-    serveMotionFrameCount: 0,
-    analysisReadyFrameCount: 0,
-    multiPersonFrameCount: 0,
-    cameraAngle: undefined,
-    message: "모바일 브라우저에서는 1차 포즈 검사를 건너뛰고 AI 분석으로 진행합니다.",
-  };
+async function precheckServeVideo(video: HTMLVideoElement, duration: number, angle: CameraAngle) {
+  const landmarker = await withTimeout(createPoseLandmarker(3), 6000).catch(() => null);
+
+  if (!landmarker) {
+    return {
+      valid: false,
+      usableFrameCount: 0,
+      serveMotionFrameCount: 0,
+      analysisReadyFrameCount: 0,
+      multiPersonFrameCount: 0,
+      message: "브라우저에서 자세 확인을 준비하지 못했습니다. 영상을 한 번 재생한 뒤 다시 시도해주세요.",
+    };
+  }
+
+  try {
+    const samples: PoseSample[] = [];
+    const sampleTimes = buildPoseSampleTimes(duration, 1.2, 16);
+
+    for (const time of sampleTimes) {
+      const detectedPoses = await withTimeout(detectPosesAtTime(video, time, landmarker), 1800).catch(() => undefined);
+      const landmarks = detectedPoses?.[0];
+
+      if (!landmarks) {
+        continue;
+      }
+
+      const sample = {
+        time,
+        landmarks,
+        poseCount: detectedPoses?.length ?? 1,
+      };
+
+      if (isUsablePoseSample(sample)) {
+        samples.push(sample);
+      }
+    }
+
+    return assessServeVideoCandidate(samples, angle);
+  } finally {
+    landmarker.close();
+  }
+}
+
+function formatPrecheckError(precheck: Awaited<ReturnType<typeof precheckServeVideo>>) {
+  const baseMessage = precheck.message ?? "서브 영상으로 확인되지 않았습니다.";
+
+  return `${baseMessage} (진단: usable ${precheck.usableFrameCount}, ready ${
+    precheck.analysisReadyFrameCount ?? 0
+  }, motion ${precheck.serveMotionFrameCount}, multi ${precheck.multiPersonFrameCount ?? 0})`;
+}
+
+function isMobileLikeBrowser() {
+  if (typeof navigator === "undefined") {
+    return false;
+  }
+
+  return (
+    /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
+    window.matchMedia?.("(pointer: coarse)")?.matches === true
+  );
 }
 
 function buildRepresentativeSnapshots(analyses: ServeAnalysis[]) {
