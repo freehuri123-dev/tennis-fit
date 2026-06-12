@@ -401,8 +401,7 @@ export default function Home() {
         poseLandmarker?.close();
       }
 
-      setAiReport(report);
-      setAnalyses([
+      const nextAnalyses = [
         {
           index: 1,
           issue: report.topIssues[0]?.title ?? report.todayFocus,
@@ -410,7 +409,23 @@ export default function Home() {
           recommendation: report.correctionSuggestion,
           snapshots,
         },
-      ]);
+      ];
+
+      setAiReport(report);
+      setAnalyses(nextAnalyses);
+
+      try {
+        const saved = await saveResultReport(nextAnalyses, report);
+        const url = new URL(`/reports/${saved.id}`, window.location.origin);
+        setShareUrl(url.toString());
+        setShareMessage("분석 결과가 코칭기록에 저장되었습니다.");
+      } catch (saveError) {
+        setShareMessage(
+          saveError instanceof Error
+            ? `분석은 완료됐지만 기록 저장에 실패했습니다. ${saveError.message}`
+            : "분석은 완료됐지만 기록 저장에 실패했습니다.",
+        );
+      }
     } catch (analysisError) {
       setAnalyses([]);
       setAiReport(null);
@@ -448,25 +463,18 @@ export default function Home() {
     setShareMessage("");
 
     try {
-      const saveOptions = {
-        serveType,
-        serveTypeLabel: serveTypeInfo.title,
-      };
-      const analysesForSave = await prepareAnalysesForSave(analyses);
-      const saved = await saveServeReportRemote(analysesForSave, aiReport, saveOptions).catch((saveError) => {
-        if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
-          return saveServeReport(analysesForSave, aiReport, saveOptions);
-        }
+      let url = shareUrl;
 
-        throw saveError;
-      });
-      const url = new URL(`/reports/${saved.id}`, window.location.origin);
+      if (!url) {
+        const saved = await saveResultReport(analyses, aiReport);
+        url = new URL(`/reports/${saved.id}`, window.location.origin).toString();
+        setShareUrl(url);
+      }
 
       window.history.replaceState(null, "", url.toString());
-      setShareUrl(url.toString());
 
       try {
-        await copyTextToClipboard(url.toString());
+        await copyTextToClipboard(url);
         setShareMessage("분석 결과 링크를 복사했습니다.");
       } catch {
         setShareMessage("분석 결과가 저장되었습니다. 아래 링크 복사를 눌러주세요.");
@@ -480,6 +488,22 @@ export default function Home() {
     } finally {
       setIsSharing(false);
     }
+  }
+
+  async function saveResultReport(nextAnalyses: ServeAnalysis[], nextAiReport: GeminiServeReport | null) {
+    const saveOptions = {
+      serveType,
+      serveTypeLabel: serveTypeInfo.title,
+    };
+    const analysesForSave = await prepareAnalysesForSave(nextAnalyses);
+
+    return saveServeReportRemote(analysesForSave, nextAiReport, saveOptions).catch((saveError) => {
+      if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+        return saveServeReport(analysesForSave, nextAiReport, saveOptions);
+      }
+
+      throw saveError;
+    });
   }
 
   async function copySavedShareUrl() {
