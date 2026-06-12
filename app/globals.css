@@ -979,6 +979,11 @@ figcaption span,
   white-space: nowrap;
 }
 
+.share-action:disabled {
+  background: #8baaa0;
+  cursor: wait;
+}
+
 .share-action:focus-visible {
   outline: 2px solid var(--court);
   outline-offset: 2px;
@@ -994,6 +999,39 @@ figcaption span,
   line-height: 1.45;
   margin: 14px 0 0;
   padding: 10px 12px;
+}
+
+.share-url-box {
+  align-items: center;
+  background: #f8faf8;
+  border: 1px solid #d7e4dc;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr auto;
+  margin-top: 10px;
+  padding: 10px;
+}
+
+.share-url-box a {
+  color: var(--court-dark);
+  font-size: 13px;
+  font-weight: 800;
+  overflow: hidden;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-url-box button {
+  background: white;
+  border: 1px solid #bcd0c5;
+  border-radius: 8px;
+  color: var(--court-dark);
+  font-size: 13px;
+  font-weight: 900;
+  min-height: 36px;
+  padding: 0 12px;
 }
 
 .coach-dashboard {

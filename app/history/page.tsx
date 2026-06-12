@@ -7,8 +7,10 @@ import { formatReportDate, listServeReports, listServeReportsRemote, type SavedS
 export default function HistoryPage() {
   const [reports, setReports] = useState<SavedServeReport[]>([]);
   const [error, setError] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    setIsLoading(true);
     listServeReportsRemote()
       .then((remoteReports) => {
         setReports(remoteReports);
@@ -22,6 +24,9 @@ export default function HistoryPage() {
         }
 
         setError(loadError instanceof Error ? loadError.message : "코칭 기록을 불러오지 못했습니다.");
+      })
+      .finally(() => {
+        setIsLoading(false);
       });
   }, []);
 
@@ -81,6 +86,16 @@ export default function HistoryPage() {
           </div>
         )}
       </section>
+
+      {isLoading ? (
+        <div className="analysis-overlay" role="status" aria-live="polite">
+          <div className="analysis-loader">
+            <span className="loader-ring" aria-hidden="true" />
+            <strong>코칭 기록을 불러오는 중입니다</strong>
+            <p>저장된 분석 결과 목록을 확인하고 있어요.</p>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

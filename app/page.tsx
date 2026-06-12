@@ -174,6 +174,8 @@ export default function Home() {
   const [analysisFailed, setAnalysisFailed] = useState(false);
   const [error, setError] = useState("");
   const [shareMessage, setShareMessage] = useState("");
+  const [shareUrl, setShareUrl] = useState("");
+  const [isSharing, setIsSharing] = useState(false);
   const [playingSnapshotKey, setPlayingSnapshotKey] = useState<string | null>(null);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [isGuideZoomOpen, setIsGuideZoomOpen] = useState(false);
@@ -284,6 +286,7 @@ export default function Home() {
     setAnalyses([]);
     setAiReport(null);
     setShareMessage("");
+    setShareUrl("");
     setAnalysisFailed(false);
     setIsVideoReady(false);
     setPrecheckRetryAvailable(false);
@@ -437,9 +440,12 @@ export default function Home() {
   }
 
   async function shareReport() {
-    if (analyses.length === 0) {
+    if (analyses.length === 0 || isSharing) {
       return;
     }
+
+    setIsSharing(true);
+    setShareMessage("");
 
     try {
       const saveOptions = {
@@ -457,15 +463,35 @@ export default function Home() {
       const url = new URL(`/reports/${saved.id}`, window.location.origin);
 
       window.history.replaceState(null, "", url.toString());
+      setShareUrl(url.toString());
 
-      await copyTextToClipboard(url.toString());
-      setShareMessage("분석 결과 링크를 복사했습니다.");
+      try {
+        await copyTextToClipboard(url.toString());
+        setShareMessage("분석 결과 링크를 복사했습니다.");
+      } catch {
+        setShareMessage("분석 결과가 저장되었습니다. 아래 링크 복사를 눌러주세요.");
+      }
     } catch (saveError) {
       setShareMessage(
         saveError instanceof Error
           ? `결과 저장에 실패했습니다. ${saveError.message}`
           : "결과 저장에 실패했습니다. DB/Blob 환경변수를 확인해주세요.",
       );
+    } finally {
+      setIsSharing(false);
+    }
+  }
+
+  async function copySavedShareUrl() {
+    if (!shareUrl) {
+      return;
+    }
+
+    try {
+      await copyTextToClipboard(shareUrl);
+      setShareMessage("분석 결과 링크를 복사했습니다.");
+    } catch (copyError) {
+      setShareMessage(copyError instanceof Error ? copyError.message : "링크 복사에 실패했습니다.");
     }
   }
 
@@ -706,12 +732,20 @@ export default function Home() {
               {aiReport ? <p className="report-meta-pill">신뢰도: {formatConfidence(aiReport.confidence)}</p> : null}
             </div>
           </div>
-            <button className="share-action" type="button" onClick={shareReport}>
-              공유하기
+            <button className="share-action" type="button" onClick={shareReport} disabled={isSharing}>
+              {isSharing ? "저장 중" : "공유하기"}
             </button>
           </div>
 
           {shareMessage ? <p className="share-message">{shareMessage}</p> : null}
+          {shareUrl ? (
+            <div className="share-url-box">
+              <a href={shareUrl}>{shareUrl}</a>
+              <button type="button" onClick={copySavedShareUrl}>
+                링크 복사
+              </button>
+            </div>
+          ) : null}
 
           <div className="coach-dashboard">
             <div className="priority-card">
@@ -817,6 +851,16 @@ export default function Home() {
             <span className="loader-ring" aria-hidden="true" />
             <strong>AI가 서브 영상을 분석 중입니다</strong>
             <p>먼저 서브 동작인지 확인한 뒤, 중요 장면과 코칭 리포트를 만드는 중이에요.</p>
+          </div>
+        </div>
+      ) : null}
+
+      {isSharing ? (
+        <div className="analysis-overlay" role="status" aria-live="polite">
+          <div className="analysis-loader">
+            <span className="loader-ring" aria-hidden="true" />
+            <strong>공유 링크를 만드는 중입니다</strong>
+            <p>분석 결과와 캡처 이미지를 저장하고 URL을 준비하고 있어요.</p>
           </div>
         </div>
       ) : null}

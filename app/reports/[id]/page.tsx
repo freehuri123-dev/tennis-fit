@@ -14,6 +14,7 @@ export default function ReportDetailPage({ params }: { params: Promise<{ id: str
   const [report, setReport] = useState<SavedServeReport | null>(null);
   const [error, setError] = useState("");
   const [shareMessage, setShareMessage] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
   const [playingSnapshotKey, setPlayingSnapshotKey] = useState<string | null>(null);
   const playbackTimersRef = useRef<number[]>([]);
 
@@ -25,6 +26,7 @@ export default function ReportDetailPage({ params }: { params: Promise<{ id: str
         return;
       }
 
+      setIsLoading(true);
       loadServeReportRemote(id)
         .catch((loadError) => {
           if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
@@ -51,6 +53,11 @@ export default function ReportDetailPage({ params }: { params: Promise<{ id: str
           }
 
           setError(loadError instanceof Error ? loadError.message : "분석 결과를 불러오지 못했습니다.");
+        })
+        .finally(() => {
+          if (mounted) {
+            setIsLoading(false);
+          }
         });
     });
 
@@ -151,6 +158,15 @@ export default function ReportDetailPage({ params }: { params: Promise<{ id: str
           <p className="eyebrow">Report</p>
           <h2>분석 결과를 불러오는 중입니다</h2>
         </section>
+        {isLoading ? (
+          <div className="analysis-overlay" role="status" aria-live="polite">
+            <div className="analysis-loader">
+              <span className="loader-ring" aria-hidden="true" />
+              <strong>코칭 결과를 불러오는 중입니다</strong>
+              <p>저장된 분석 리포트와 캡처 이미지를 준비하고 있어요.</p>
+            </div>
+          </div>
+        ) : null}
       </main>
     );
   }
@@ -275,6 +291,16 @@ export default function ReportDetailPage({ params }: { params: Promise<{ id: str
           </div>
         </article>
       </section>
+
+      {isLoading ? (
+        <div className="analysis-overlay" role="status" aria-live="polite">
+          <div className="analysis-loader">
+            <span className="loader-ring" aria-hidden="true" />
+            <strong>코칭 결과를 불러오는 중입니다</strong>
+            <p>저장된 분석 리포트와 캡처 이미지를 준비하고 있어요.</p>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
