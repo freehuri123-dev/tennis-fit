@@ -2,8 +2,6 @@
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
-  assessServeVideoCandidate,
-  buildPoseSampleTimes,
   isUsablePoseSample,
   serveFocusAreas,
   type PoseLandmarkPoint,
@@ -176,7 +174,6 @@ export default function Home() {
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [isGuideZoomOpen, setIsGuideZoomOpen] = useState(false);
   const [isVideoReady, setIsVideoReady] = useState(false);
-  const [isPreparingVideo, setIsPreparingVideo] = useState(false);
   const playbackTimersRef = useRef<number[]>([]);
 
   const phases = useMemo(() => phaseTemplates[angle], [angle]);
@@ -283,7 +280,6 @@ export default function Home() {
     setShareMessage("");
     setAnalysisFailed(false);
     setIsVideoReady(false);
-    setIsPreparingVideo(false);
 
     if (!file) {
       setVideoFile(null);
@@ -323,18 +319,9 @@ export default function Home() {
     const restoreConsoleError = installMediaPipeConsoleNoiseFilter();
 
     try {
-      await ensureMetadata(video);
-      const duration = video.duration || 20;
-      const skipBrowserPrecheck = isMobileLikeBrowser();
-      const precheck = skipBrowserPrecheck ? createSkippedPrecheck() : await precheckServeVideo(video, duration, angle);
-
-      if (!precheck.valid && shouldBlockBeforeAi(precheck)) {
-        setAnalyses([]);
-        setAiReport(null);
-        setAnalysisFailed(true);
-        setError(formatPrecheckError(precheck));
-        return;
-      }
+      const metadataReady = await ensureMetadata(video).then(() => true).catch(() => false);
+      const duration = metadataReady && Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 20;
+      const precheck = createSkippedPrecheck();
 
       const report = await requestAiServeAnalysis(videoFile, angle, serveType, duration, {
         usableFrameCount: precheck.usableFrameCount,
@@ -422,19 +409,6 @@ export default function Home() {
     }
 
     setError("");
-    setIsPreparingVideo(true);
-
-    try {
-      await ensureMetadata(videoRef.current);
-      setIsVideoReady(true);
-    } catch {
-      setError("영상을 불러오지 못했습니다. 다른 영상 파일로 다시 시도해주세요.");
-      setAnalysisFailed(false);
-      return;
-    } finally {
-      setIsPreparingVideo(false);
-    }
-
     setIsConfirmOpen(true);
   }
 
@@ -635,11 +609,11 @@ export default function Home() {
           <div className="action-row">
             <button
               className="primary-action"
-              disabled={isAnalyzing || isPreparingVideo}
+              disabled={isAnalyzing}
               type="button"
               onClick={requestAnalysisConfirmation}
             >
-              {isAnalyzing ? "AI 분석 중" : isPreparingVideo ? "영상 준비 중" : "코칭 결과 보기"}
+              {isAnalyzing ? "AI 분석 중" : "코칭 결과 보기"}
             </button>
           </div>
 
@@ -672,8 +646,8 @@ export default function Home() {
           <p className="eyebrow">Analysis Failed</p>
           <h2>영상 분석 실패</h2>
           <p>
-            전신이 화면 밖으로 나가거나 영상이 너무 어둡거나 흔들리면 분석이 어려울 수 있습니다.
-            전신이 보이는 짧은 서브 영상으로 다시 시도해주세요.
+            {error ||
+              "전신이 화면 밖으로 나가거나 영상이 너무 어둡거나 흔들리면 분석이 어려울 수 있습니다. 전신이 보이는 짧은 서브 영상으로 다시 시도해주세요."}
           </p>
         </section>
       ) : null}
@@ -880,57 +854,6 @@ async function requestAiServeAnalysis(
   return (await response.json()) as GeminiServeReport;
 }
 
-async function precheckServeVideo(video: HTMLVideoElement, duration: number, angle: CameraAngle) {
-  const landmarker = await withTimeout(createPoseLandmarker(3), 6000).catch(() => null);
-
-  if (!landmarker) {
-    return {
-      valid: true,
-      usableFrameCount: 0,
-      serveMotionFrameCount: 0,
-      analysisReadyFrameCount: 0,
-      multiPersonFrameCount: 0,
-      message: "브라우저에서 1차 포즈 검사를 건너뛰고 AI 분석으로 진행합니다.",
-    };
-  }
-
-  try {
-    const samples: PoseSample[] = [];
-    const sampleTimes = buildPoseSampleTimes(duration, 1.2, 16);
-
-    for (const time of sampleTimes) {
-      const detectedPoses = await withTimeout(detectPosesAtTime(video, time, landmarker), 1800).catch(() => undefined);
-      const landmarks = detectedPoses?.[0];
-
-      if (!landmarks) {
-        continue;
-      }
-
-      const sample = {
-        time,
-        landmarks,
-        poseCount: detectedPoses?.length ?? 1,
-      };
-
-      if (isUsablePoseSample(sample)) {
-        samples.push(sample);
-      }
-    }
-
-    return assessServeVideoCandidate(samples, angle);
-  } finally {
-    landmarker.close();
-  }
-}
-
-function formatPrecheckError(precheck: Awaited<ReturnType<typeof precheckServeVideo>>) {
-  const baseMessage = precheck.message ?? "서브 영상으로 확인되지 않았습니다.";
-
-  return `${baseMessage} (진단: usable ${precheck.usableFrameCount}, ready ${
-    precheck.analysisReadyFrameCount ?? 0
-  }, motion ${precheck.serveMotionFrameCount}, multi ${precheck.multiPersonFrameCount ?? 0})`;
-}
-
 function createSkippedPrecheck() {
   return {
     valid: true,
@@ -941,28 +864,6 @@ function createSkippedPrecheck() {
     cameraAngle: undefined,
     message: "모바일 브라우저에서는 1차 포즈 검사를 건너뛰고 AI 분석으로 진행합니다.",
   };
-}
-
-function isMobileLikeBrowser() {
-  if (typeof navigator === "undefined") {
-    return false;
-  }
-
-  return (
-    /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
-    window.matchMedia?.("(pointer: coarse)")?.matches === true
-  );
-}
-
-function shouldBlockBeforeAi(precheck: Awaited<ReturnType<typeof precheckServeVideo>>) {
-  const usableFrameCount = precheck.usableFrameCount;
-  const readyFrameCount = precheck.analysisReadyFrameCount ?? 0;
-  const motionFrameCount = precheck.serveMotionFrameCount;
-  const multiPersonFrameCount = precheck.multiPersonFrameCount ?? 0;
-  const clearGameClip = multiPersonFrameCount >= 2 && motionFrameCount === 0;
-  const enoughPoseEvidenceWithoutServe = usableFrameCount >= 6 && readyFrameCount === 0 && motionFrameCount === 0;
-
-  return clearGameClip || enoughPoseEvidenceWithoutServe;
 }
 
 function buildRepresentativeSnapshots(analyses: ServeAnalysis[]) {
