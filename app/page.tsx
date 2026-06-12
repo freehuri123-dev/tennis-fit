@@ -325,7 +325,8 @@ export default function Home() {
     try {
       await ensureMetadata(video);
       const duration = video.duration || 20;
-      const precheck = await precheckServeVideo(video, duration, angle);
+      const skipBrowserPrecheck = isMobileLikeBrowser();
+      const precheck = skipBrowserPrecheck ? createSkippedPrecheck() : await precheckServeVideo(video, duration, angle);
 
       if (!precheck.valid && shouldBlockBeforeAi(precheck)) {
         setAnalyses([]);
@@ -349,40 +350,44 @@ export default function Home() {
 
       try {
         for (let index = 0; index < report.keyMoments.length; index += 1) {
-          const moment = report.keyMoments[index];
-          const refinedMoment = poseLandmarker
-            ? await withTimeout(
-                refineMomentTime(video, moment, poseLandmarker, () => {
+          try {
+            const moment = report.keyMoments[index];
+            const refinedMoment = poseLandmarker
+              ? await withTimeout(
+                  refineMomentTime(video, moment, poseLandmarker, () => {
+                    refinementTimestampMs += 100;
+                    return refinementTimestampMs;
+                  }),
+                  4500,
+                ).catch(() => ({
+                  time: moment.time,
+                  landmarks: undefined,
+                }))
+              : { time: moment.time, landmarks: undefined };
+            const frames = poseLandmarker
+              ? await buildSnapshotFrames(video, refinedMoment.time, duration, poseLandmarker, () => {
                   refinementTimestampMs += 100;
                   return refinementTimestampMs;
-                }),
-                4500,
-              ).catch(() => ({
-                time: moment.time,
-                landmarks: undefined,
-              }))
-            : { time: moment.time, landmarks: undefined };
-          const frames = poseLandmarker
-            ? await buildSnapshotFrames(video, refinedMoment.time, duration, poseLandmarker, () => {
-                refinementTimestampMs += 100;
-                return refinementTimestampMs;
-              }).catch(() => [])
-            : [];
-          const selectedFrameIndex = findNearestFrameIndex(frames, refinedMoment.time);
-          const selectedFrame = selectedFrameIndex >= 0 ? frames[selectedFrameIndex] : undefined;
-          const image = selectedFrame?.image ?? (await captureFrame(video, refinedMoment.time, refinedMoment.landmarks));
-          const time = selectedFrame?.time ?? refinedMoment.time;
+                }).catch(() => [])
+              : [];
+            const selectedFrameIndex = findNearestFrameIndex(frames, refinedMoment.time);
+            const selectedFrame = selectedFrameIndex >= 0 ? frames[selectedFrameIndex] : undefined;
+            const image = selectedFrame?.image ?? (await captureFrame(video, refinedMoment.time, refinedMoment.landmarks));
+            const time = selectedFrame?.time ?? refinedMoment.time;
 
-          snapshots.push({
-            key: `ai-moment-${index}`,
-            name: moment.title,
-            cue: formatMomentCue(moment),
-            feedback: moment.comment,
-            image,
-            time,
-            frames,
-            selectedFrameIndex: selectedFrameIndex >= 0 ? selectedFrameIndex : undefined,
-          });
+            snapshots.push({
+              key: `ai-moment-${index}`,
+              name: moment.title,
+              cue: formatMomentCue(moment),
+              feedback: moment.comment,
+              image,
+              time,
+              frames,
+              selectedFrameIndex: selectedFrameIndex >= 0 ? selectedFrameIndex : undefined,
+            });
+          } catch {
+            // Mobile browsers can fail to seek/draw individual video frames. Keep the AI report visible.
+          }
         }
       } finally {
         poseLandmarker?.close();
@@ -924,6 +929,29 @@ function formatPrecheckError(precheck: Awaited<ReturnType<typeof precheckServeVi
   return `${baseMessage} (진단: usable ${precheck.usableFrameCount}, ready ${
     precheck.analysisReadyFrameCount ?? 0
   }, motion ${precheck.serveMotionFrameCount}, multi ${precheck.multiPersonFrameCount ?? 0})`;
+}
+
+function createSkippedPrecheck() {
+  return {
+    valid: true,
+    usableFrameCount: 0,
+    serveMotionFrameCount: 0,
+    analysisReadyFrameCount: 0,
+    multiPersonFrameCount: 0,
+    cameraAngle: undefined,
+    message: "모바일 브라우저에서는 1차 포즈 검사를 건너뛰고 AI 분석으로 진행합니다.",
+  };
+}
+
+function isMobileLikeBrowser() {
+  if (typeof navigator === "undefined") {
+    return false;
+  }
+
+  return (
+    /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
+    window.matchMedia?.("(pointer: coarse)")?.matches === true
+  );
 }
 
 function shouldBlockBeforeAi(precheck: Awaited<ReturnType<typeof precheckServeVideo>>) {
