@@ -327,7 +327,7 @@ export default function Home() {
       const duration = video.duration || 20;
       const precheck = await precheckServeVideo(video, duration, angle);
 
-      if (!precheck.valid) {
+      if (!precheck.valid && shouldBlockBeforeAi(precheck)) {
         setAnalyses([]);
         setAiReport(null);
         setAnalysisFailed(true);
@@ -342,14 +342,6 @@ export default function Home() {
         multiPersonFrameCount: precheck.multiPersonFrameCount ?? 0,
         cameraAngle: precheck.cameraAngle,
       });
-
-      if (report.keyMoments.length === 0) {
-        setAnalyses([]);
-        setAiReport(null);
-        setAnalysisFailed(true);
-        setError("영상 분석 실패");
-        return;
-      }
 
       const snapshots: Snapshot[] = [];
       const poseLandmarker = await withTimeout(createPoseLandmarker(), 6000).catch(() => null);
@@ -888,10 +880,12 @@ async function precheckServeVideo(video: HTMLVideoElement, duration: number, ang
 
   if (!landmarker) {
     return {
-      valid: false,
+      valid: true,
       usableFrameCount: 0,
       serveMotionFrameCount: 0,
-      message: "서브 동작이 확인되지 않았습니다. 전신이 보이는 옆 또는 뒤 촬영 서브 영상으로 다시 올려주세요.",
+      analysisReadyFrameCount: 0,
+      multiPersonFrameCount: 0,
+      message: "브라우저에서 1차 포즈 검사를 건너뛰고 AI 분석으로 진행합니다.",
     };
   }
 
@@ -930,6 +924,17 @@ function formatPrecheckError(precheck: Awaited<ReturnType<typeof precheckServeVi
   return `${baseMessage} (진단: usable ${precheck.usableFrameCount}, ready ${
     precheck.analysisReadyFrameCount ?? 0
   }, motion ${precheck.serveMotionFrameCount}, multi ${precheck.multiPersonFrameCount ?? 0})`;
+}
+
+function shouldBlockBeforeAi(precheck: Awaited<ReturnType<typeof precheckServeVideo>>) {
+  const usableFrameCount = precheck.usableFrameCount;
+  const readyFrameCount = precheck.analysisReadyFrameCount ?? 0;
+  const motionFrameCount = precheck.serveMotionFrameCount;
+  const multiPersonFrameCount = precheck.multiPersonFrameCount ?? 0;
+  const clearGameClip = multiPersonFrameCount >= 2 && motionFrameCount === 0;
+  const enoughPoseEvidenceWithoutServe = usableFrameCount >= 6 && readyFrameCount === 0 && motionFrameCount === 0;
+
+  return clearGameClip || enoughPoseEvidenceWithoutServe;
 }
 
 function buildRepresentativeSnapshots(analyses: ServeAnalysis[]) {
