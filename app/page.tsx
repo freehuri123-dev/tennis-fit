@@ -443,9 +443,10 @@ export default function Home() {
         serveType,
         serveTypeLabel: serveTypeInfo.title,
       };
-      const saved = await saveServeReportRemote(analyses, aiReport, saveOptions).catch((saveError) => {
+      const analysesForSave = await prepareAnalysesForSave(analyses);
+      const saved = await saveServeReportRemote(analysesForSave, aiReport, saveOptions).catch((saveError) => {
         if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
-          return saveServeReport(analyses, aiReport, saveOptions);
+          return saveServeReport(analysesForSave, aiReport, saveOptions);
         }
 
         throw saveError;
@@ -897,6 +898,60 @@ async function requestAiServeAnalysis(
   return (await response.json()) as GeminiServeReport;
 }
 
+async function prepareAnalysesForSave(analyses: ServeAnalysis[]) {
+  return Promise.all(
+    analyses.map(async (analysis) => ({
+      ...analysis,
+      snapshots: await Promise.all(
+        analysis.snapshots.map(async (snapshot) => ({
+          ...snapshot,
+          image: await compressDataUrlImage(snapshot.image),
+          frames: snapshot.frames?.length
+            ? await Promise.all(
+                snapshot.frames.map(async (frame) => ({
+                  ...frame,
+                  image: await compressDataUrlImage(frame.image),
+                })),
+              )
+            : snapshot.frames,
+        })),
+      ),
+    })),
+  );
+}
+
+async function compressDataUrlImage(value: string, maxDimension = 420, quality = 0.56) {
+  if (!value.startsWith("data:image/")) {
+    return value;
+  }
+
+  const image = await loadImage(value);
+  const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
+  const width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
+  const height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+
+  canvas.width = width;
+  canvas.height = height;
+
+  if (!context) {
+    return value;
+  }
+
+  context.drawImage(image, 0, 0, width, height);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
+function loadImage(src: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("저장용 캡처 이미지를 압축하지 못했습니다."));
+    image.src = src;
+  });
+}
+
 async function precheckServeVideo(video: HTMLVideoElement, duration: number, angle: CameraAngle) {
   const landmarker = await withTimeout(createPoseLandmarker(3), 6000).catch(() => null);
 
@@ -1039,7 +1094,7 @@ async function captureFrame(video: HTMLVideoElement, time: number, landmarks?: P
   const canvas = document.createElement("canvas");
   const sourceWidth = video.videoWidth || 720;
   const sourceHeight = video.videoHeight || 1280;
-  const maxDimension = 720;
+  const maxDimension = 560;
   const scale = Math.min(1, maxDimension / Math.max(sourceWidth, sourceHeight));
   const width = Math.round(sourceWidth * scale);
   const height = Math.round(sourceHeight * scale);
@@ -1057,7 +1112,7 @@ async function captureFrame(video: HTMLVideoElement, time: number, landmarks?: P
     drawPoseOverlay(context, width, height, landmarks);
   }
 
-  return canvas.toDataURL("image/jpeg", 0.72);
+  return canvas.toDataURL("image/jpeg", 0.64);
 }
 
 async function detectPoseAtTime(video: HTMLVideoElement, time: number, landmarker: BrowserPoseLandmarker) {
