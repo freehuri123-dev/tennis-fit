@@ -76,7 +76,7 @@ export async function saveServeReportRemote(
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    throw new Error(data?.error ?? "분석 결과 저장에 실패했습니다.");
+    throw new Error(formatApiError(data, "분석 결과 저장에 실패했습니다."));
   }
 
   return data.report as SavedServeReport;
@@ -110,7 +110,7 @@ export async function loadServeReportRemote(id: string): Promise<SavedServeRepor
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    throw new Error(data?.error ?? "분석 결과를 불러오지 못했습니다.");
+    throw new Error(formatApiError(data, "분석 결과를 불러오지 못했습니다."));
   }
 
   return data.report as SavedServeReport;
@@ -147,10 +147,21 @@ export async function listServeReportsRemote(): Promise<SavedServeReport[]> {
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    throw new Error(data?.error ?? "코칭 기록을 불러오지 못했습니다.");
+    throw new Error(formatApiError(data, "코칭 기록을 불러오지 못했습니다."));
   }
 
   return Array.isArray(data.reports) ? (data.reports as SavedServeReport[]) : [];
+}
+
+function formatApiError(data: unknown, fallback: string) {
+  if (!data || typeof data !== "object") {
+    return fallback;
+  }
+
+  const error = "error" in data && typeof data.error === "string" ? data.error : fallback;
+  const detail = "detail" in data && typeof data.detail === "string" ? data.detail : "";
+
+  return detail ? `${error} (${detail})` : error;
 }
 
 export function formatReportDate(value: string) {

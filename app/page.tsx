@@ -176,6 +176,7 @@ export default function Home() {
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [isGuideZoomOpen, setIsGuideZoomOpen] = useState(false);
   const [isVideoReady, setIsVideoReady] = useState(false);
+  const [precheckRetryAvailable, setPrecheckRetryAvailable] = useState(false);
   const playbackTimersRef = useRef<number[]>([]);
 
   const phases = useMemo(() => phaseTemplates[angle], [angle]);
@@ -283,6 +284,7 @@ export default function Home() {
     setShareMessage("");
     setAnalysisFailed(false);
     setIsVideoReady(false);
+    setPrecheckRetryAvailable(false);
 
     if (!file) {
       setVideoFile(null);
@@ -304,7 +306,7 @@ export default function Home() {
     setVideoUrl(URL.createObjectURL(file));
   }
 
-  async function analyzeVideo() {
+  async function analyzeVideo(options?: { skipPrecheck?: boolean }) {
     setIsConfirmOpen(false);
     const video = videoRef.current;
 
@@ -318,19 +320,21 @@ export default function Home() {
     setError("");
     setShareMessage("");
     setAnalysisFailed(false);
+    setPrecheckRetryAvailable(false);
 
     const restoreConsoleError = installMediaPipeConsoleNoiseFilter();
 
     try {
       await ensureMetadata(video);
       const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 20;
-      const precheck = await precheckServeVideo(video, duration, angle);
+      const precheck = options?.skipPrecheck ? createSkippedPrecheck(angle) : await precheckServeVideo(video, duration, angle);
 
       if (!precheck.valid) {
         setAnalyses([]);
         setAiReport(null);
         setAnalysisFailed(true);
         setError(formatPrecheckError(precheck));
+        setPrecheckRetryAvailable(precheck.canRetryWithAi === true);
         return;
       }
 
@@ -456,8 +460,12 @@ export default function Home() {
       } else {
         setShareMessage("분석 결과가 저장되었습니다. 주소창의 링크로 다시 열 수 있습니다.");
       }
-    } catch {
-      setShareMessage("결과 저장에 실패했습니다. DB/Blob 환경변수를 확인해주세요.");
+    } catch (saveError) {
+      setShareMessage(
+        saveError instanceof Error
+          ? `결과 저장에 실패했습니다. ${saveError.message}`
+          : "결과 저장에 실패했습니다. DB/Blob 환경변수를 확인해주세요.",
+      );
     }
   }
 
@@ -672,6 +680,18 @@ export default function Home() {
             {error ||
               "전신이 화면 밖으로 나가거나 영상이 너무 어둡거나 흔들리면 분석이 어려울 수 있습니다. 전신이 보이는 짧은 서브 영상으로 다시 시도해주세요."}
           </p>
+          {precheckRetryAvailable ? (
+            <div className="precheck-retry-box">
+              <strong>브라우저 1차 확인이 불안정합니다.</strong>
+              <p>
+                모바일 브라우저에서는 영상 프레임/자세 확인이 실패할 수 있습니다. 서브 영상이 맞고 촬영 방향을 확인했다면
+                AI 분석으로 진행할 수 있습니다.
+              </p>
+              <button type="button" onClick={() => analyzeVideo({ skipPrecheck: true })}>
+                AI 분석으로 진행
+              </button>
+            </div>
+          ) : null}
         </section>
       ) : null}
 
@@ -825,7 +845,7 @@ export default function Home() {
               <button className="secondary-confirm" type="button" onClick={() => setIsConfirmOpen(false)}>
                 다시 선택
               </button>
-              <button className="primary-confirm" type="button" onClick={analyzeVideo}>
+              <button className="primary-confirm" type="button" onClick={() => analyzeVideo()}>
                 이 기준으로 분석
               </button>
             </div>
@@ -888,6 +908,7 @@ async function precheckServeVideo(video: HTMLVideoElement, duration: number, ang
       analysisReadyFrameCount: 0,
       multiPersonFrameCount: 0,
       message: "브라우저에서 자세 확인을 준비하지 못했습니다. 영상을 한 번 재생한 뒤 다시 시도해주세요.",
+      canRetryWithAi: true,
     };
   }
 
@@ -914,10 +935,32 @@ async function precheckServeVideo(video: HTMLVideoElement, duration: number, ang
       }
     }
 
-    return assessServeVideoCandidate(samples, angle);
+    const result = assessServeVideoCandidate(samples, angle);
+
+    return {
+      ...result,
+      canRetryWithAi:
+        !result.valid &&
+        samples.length > 0 &&
+        (isMobileLikeBrowser() || result.usableFrameCount > 0) &&
+        (result.multiPersonFrameCount ?? 0) <= 1,
+    };
   } finally {
     landmarker.close();
   }
+}
+
+function createSkippedPrecheck(angle: CameraAngle) {
+  return {
+    valid: true,
+    usableFrameCount: 0,
+    serveMotionFrameCount: 0,
+    analysisReadyFrameCount: 0,
+    multiPersonFrameCount: 0,
+    cameraAngle: angle,
+    message: "브라우저 1차 확인을 건너뛰고 AI 분석으로 진행합니다.",
+    canRetryWithAi: false,
+  };
 }
 
 function formatPrecheckError(precheck: Awaited<ReturnType<typeof precheckServeVideo>>) {
