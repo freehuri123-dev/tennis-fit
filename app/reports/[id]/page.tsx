@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import {
   formatReportDate,
@@ -143,9 +142,6 @@ export default function ReportDetailPage({ params }: { params: Promise<{ id: str
           <p className="eyebrow">Report</p>
           <h2>결과를 찾을 수 없습니다</h2>
           <p>{error}</p>
-          <Link className="history-new-link" href="/history">
-            기록 목록으로
-          </Link>
         </section>
       </main>
     );
@@ -181,11 +177,6 @@ export default function ReportDetailPage({ params }: { params: Promise<{ id: str
 
   return (
     <main className="app-shell">
-      <section className="report-nav">
-        <Link href="/history">기록 목록</Link>
-        <Link href="/">새 분석</Link>
-      </section>
-
       <section className="result-section">
         <div className="summary-row">
           <div>
