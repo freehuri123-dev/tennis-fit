@@ -175,6 +175,8 @@ export default function Home() {
   const [playingSnapshotKey, setPlayingSnapshotKey] = useState<string | null>(null);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [isGuideZoomOpen, setIsGuideZoomOpen] = useState(false);
+  const [isVideoReady, setIsVideoReady] = useState(false);
+  const [isPreparingVideo, setIsPreparingVideo] = useState(false);
   const playbackTimersRef = useRef<number[]>([]);
 
   const phases = useMemo(() => phaseTemplates[angle], [angle]);
@@ -220,6 +222,39 @@ export default function Home() {
   }, [isGuideZoomOpen]);
 
   useEffect(() => {
+    if (!videoUrl) {
+      setIsVideoReady(false);
+      return;
+    }
+
+    const video = videoRef.current;
+
+    if (!video) {
+      return;
+    }
+
+    let cancelled = false;
+    setIsVideoReady(false);
+    video.load();
+
+    ensureMetadata(video)
+      .then(() => {
+        if (!cancelled) {
+          setIsVideoReady(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setIsVideoReady(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [videoUrl]);
+
+  useEffect(() => {
     const reportId = new URLSearchParams(window.location.search).get("report");
 
     if (!reportId) {
@@ -247,6 +282,8 @@ export default function Home() {
     setAiReport(null);
     setShareMessage("");
     setAnalysisFailed(false);
+    setIsVideoReady(false);
+    setIsPreparingVideo(false);
 
     if (!file) {
       setVideoFile(null);
@@ -380,7 +417,7 @@ export default function Home() {
     }
   }
 
-  function requestAnalysisConfirmation() {
+  async function requestAnalysisConfirmation() {
     if (!videoRef.current || !videoUrl || !videoFile) {
       setError("먼저 서브 영상을 올려주세요.");
       setAnalysisFailed(false);
@@ -388,6 +425,19 @@ export default function Home() {
     }
 
     setError("");
+    setIsPreparingVideo(true);
+
+    try {
+      await ensureMetadata(videoRef.current);
+      setIsVideoReady(true);
+    } catch {
+      setError("영상을 불러오지 못했습니다. 다른 영상 파일로 다시 시도해주세요.");
+      setAnalysisFailed(false);
+      return;
+    } finally {
+      setIsPreparingVideo(false);
+    }
+
     setIsConfirmOpen(true);
   }
 
@@ -586,8 +636,13 @@ export default function Home() {
           </div>
 
           <div className="action-row">
-            <button className="primary-action" disabled={isAnalyzing} type="button" onClick={requestAnalysisConfirmation}>
-              {isAnalyzing ? "AI 분석 중" : "코칭 결과 보기"}
+            <button
+              className="primary-action"
+              disabled={isAnalyzing || isPreparingVideo}
+              type="button"
+              onClick={requestAnalysisConfirmation}
+            >
+              {isAnalyzing ? "AI 분석 중" : isPreparingVideo ? "영상 준비 중" : "코칭 결과 보기"}
             </button>
           </div>
 
@@ -596,7 +651,16 @@ export default function Home() {
 
         <div className="preview-panel">
           {videoUrl ? (
-            <video ref={videoRef} controls playsInline preload="metadata" src={videoUrl} />
+            <video
+              ref={videoRef}
+              controls
+              playsInline
+              preload="auto"
+              src={videoUrl}
+              onCanPlay={() => setIsVideoReady(true)}
+              onLoadedData={() => setIsVideoReady(true)}
+              onLoadedMetadata={() => setIsVideoReady(true)}
+            />
           ) : (
             <div className="empty-preview">
               <span>영상 미리보기</span>
@@ -782,7 +846,9 @@ export default function Home() {
             <button className="guide-zoom-close" onClick={() => setIsGuideZoomOpen(false)} type="button">
               닫기
             </button>
-            <img alt="전신과 라켓이 보이는 서브 촬영 예시 확대 이미지" src="/images/serve-capture-guide.jpg" />
+            <div className="guide-zoom-scroll">
+              <img alt="전신과 라켓이 보이는 서브 촬영 예시 확대 이미지" src="/images/serve-capture-guide.jpg" />
+            </div>
           </div>
         </div>
       ) : null}
@@ -881,13 +947,39 @@ function buildRepresentativeSnapshots(analyses: ServeAnalysis[]) {
 }
 
 function ensureMetadata(video: HTMLVideoElement) {
-  if (video.readyState >= 1) {
+  if (video.readyState >= 1 && Number.isFinite(video.duration) && video.duration > 0) {
     return Promise.resolve();
   }
 
   return new Promise<void>((resolve, reject) => {
-    video.onloadedmetadata = () => resolve();
-    video.onerror = () => reject();
+    const cleanup = () => {
+      window.clearTimeout(timeoutId);
+      video.removeEventListener("loadedmetadata", handleReady);
+      video.removeEventListener("loadeddata", handleReady);
+      video.removeEventListener("canplay", handleReady);
+      video.removeEventListener("error", handleError);
+    };
+    const handleReady = () => {
+      if (Number.isFinite(video.duration) && video.duration > 0) {
+        cleanup();
+        resolve();
+      }
+    };
+    const handleError = () => {
+      cleanup();
+      reject(new Error("video load failed"));
+    };
+    const timeoutId = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("video metadata timeout"));
+    }, 10000);
+
+    video.addEventListener("loadedmetadata", handleReady);
+    video.addEventListener("loadeddata", handleReady);
+    video.addEventListener("canplay", handleReady);
+    video.addEventListener("error", handleError);
+    video.load();
+    handleReady();
   });
 }
 

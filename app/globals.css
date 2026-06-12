@@ -521,20 +521,28 @@ figcaption span,
 }
 
 .guide-zoom-card {
-  max-height: calc(100vh - 28px);
+  height: calc(100vh - 28px);
   max-width: min(960px, calc(100vw - 28px));
   position: relative;
   width: 100%;
   z-index: 1;
 }
 
-.guide-zoom-card img {
+.guide-zoom-scroll {
   border-radius: 8px;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.34);
+  height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y pinch-zoom;
+  width: 100%;
+}
+
+.guide-zoom-scroll img {
+  border-radius: 8px;
   display: block;
   height: auto;
-  max-height: calc(100vh - 84px);
-  object-fit: contain;
+  min-width: min(1080px, 180vw);
   width: 100%;
 }
 
