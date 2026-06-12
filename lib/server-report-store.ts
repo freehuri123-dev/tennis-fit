@@ -1,5 +1,5 @@
 import { put } from "@vercel/blob";
-import { neon } from "@neondatabase/serverless";
+import { Pool } from "pg";
 import type { AiServeReport } from "./ai-serve-report";
 import type { SavedServeAnalysis, SavedServeReport } from "./saved-reports";
 
@@ -20,15 +20,24 @@ type SaveReportInput = {
 };
 
 let schemaReady = false;
+let pool: Pool | null = null;
 
-function getSql() {
+function getPool() {
   const databaseUrl = process.env.DATABASE_URL;
 
   if (!databaseUrl) {
     throw new Error("DATABASE_URL is not configured");
   }
 
-  return neon(databaseUrl);
+  if (!pool) {
+    pool = new Pool({
+      connectionString: databaseUrl,
+      ssl: databaseUrl.includes("sslmode=require") ? { rejectUnauthorized: false } : undefined,
+      max: 1,
+    });
+  }
+
+  return pool;
 }
 
 async function ensureSchema() {
@@ -36,9 +45,9 @@ async function ensureSchema() {
     return;
   }
 
-  const sql = getSql();
+  const db = getPool();
 
-  await sql`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS serve_reports (
       id BIGSERIAL PRIMARY KEY,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -47,7 +56,7 @@ async function ensureSchema() {
       analyses JSONB NOT NULL,
       ai_report JSONB
     )
-  `;
+  `);
 
   schemaReady = true;
 }
@@ -55,20 +64,23 @@ async function ensureSchema() {
 export async function saveReportToStore(input: SaveReportInput): Promise<SavedServeReport> {
   await ensureSchema();
 
-  const sql = getSql();
+  const db = getPool();
   const analyses = await uploadAnalysisImages(input.analyses);
-  const rows = (await sql`
+  const result = await db.query<ReportRow>(
+    `
     INSERT INTO serve_reports (serve_type, serve_type_label, analyses, ai_report)
-    VALUES (
-      ${input.serveType ?? null},
-      ${input.serveTypeLabel ?? null},
-      ${JSON.stringify(analyses)}::jsonb,
-      ${input.aiReport ? JSON.stringify(input.aiReport) : null}::jsonb
-    )
+    VALUES ($1, $2, $3::jsonb, $4::jsonb)
     RETURNING id, created_at, serve_type, serve_type_label, analyses, ai_report
-  `) as ReportRow[];
+  `,
+    [
+      input.serveType ?? null,
+      input.serveTypeLabel ?? null,
+      JSON.stringify(analyses),
+      input.aiReport ? JSON.stringify(input.aiReport) : null,
+    ],
+  );
 
-  return rowToReport(rows[0]);
+  return rowToReport(result.rows[0]);
 }
 
 export async function getReportFromStore(id: string): Promise<SavedServeReport | null> {
@@ -80,36 +92,39 @@ export async function getReportFromStore(id: string): Promise<SavedServeReport |
     return null;
   }
 
-  const sql = getSql();
-  const rows = (await sql`
+  const db = getPool();
+  const result = await db.query<ReportRow>(
+    `
     SELECT id, created_at, serve_type, serve_type_label, analyses, ai_report
     FROM serve_reports
-    WHERE id = ${numericId}
+    WHERE id = $1
     LIMIT 1
-  `) as ReportRow[];
+  `,
+    [numericId],
+  );
 
-  return rows[0] ? rowToReport(rows[0]) : null;
+  return result.rows[0] ? rowToReport(result.rows[0]) : null;
 }
 
 export async function listReportsFromStore(): Promise<SavedServeReport[]> {
   await ensureSchema();
 
-  const sql = getSql();
-  const rows = (await sql`
+  const db = getPool();
+  const result = await db.query<ReportRow>(`
     SELECT id, created_at, serve_type, serve_type_label, analyses, ai_report
     FROM serve_reports
     ORDER BY created_at DESC
     LIMIT 100
-  `) as ReportRow[];
+  `);
 
-  return rows.map(rowToReport);
+  return result.rows.map(rowToReport);
 }
 
 async function uploadAnalysisImages(analyses: SavedServeAnalysis[]) {
   const blobToken = process.env.BLOB_READ_WRITE_TOKEN;
 
   if (!blobToken) {
-    throw new Error("BLOB_READ_WRITE_TOKEN is not configured");
+    return analyses;
   }
 
   const reportKey = crypto.randomUUID();
