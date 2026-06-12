@@ -158,6 +158,8 @@ const repeatedIssues: Record<CameraAngle, string[]> = {
   side: ["토스 팔 유지 부족", "트로피 포지션 무릎 굽힘 부족", "임팩트 타점이 낮아지는 경향"],
 };
 
+const maxDirectAiUploadBytes = 3_600_000;
+
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const resultRef = useRef<HTMLElement>(null);
@@ -338,7 +340,8 @@ export default function Home() {
         return;
       }
 
-      const report = await requestAiServeAnalysis(videoFile, angle, serveType, duration, {
+      const aiVideoFile = await prepareVideoForAiUpload(videoFile, video, duration);
+      const report = await requestAiServeAnalysis(aiVideoFile, angle, serveType, duration, {
         usableFrameCount: precheck.usableFrameCount,
         analysisReadyFrameCount: precheck.analysisReadyFrameCount ?? 0,
         serveMotionFrameCount: precheck.serveMotionFrameCount,
@@ -892,10 +895,152 @@ async function requestAiServeAnalysis(
 
   if (!response.ok) {
     const data = await response.json().catch(() => null);
+    if (response.status === 413) {
+      throw new Error("영상 용량이 커서 분석 서버로 보낼 수 없습니다. 20초 이하로 자르거나 화질을 낮춰 다시 올려주세요.");
+    }
     throw new Error(data?.error ?? "영상 분석 실패");
   }
 
   return (await response.json()) as GeminiServeReport;
+}
+
+async function prepareVideoForAiUpload(file: File, video: HTMLVideoElement, duration: number) {
+  if (file.size <= maxDirectAiUploadBytes) {
+    return file;
+  }
+
+  if (typeof MediaRecorder === "undefined") {
+    throw new Error("영상 용량이 커서 분석 서버로 보낼 수 없습니다. 20초 이하로 잘라 다시 올려주세요.");
+  }
+
+  const compressed = await transcodeVideoForAnalysis(video, duration, file.name);
+
+  if (compressed.size > maxDirectAiUploadBytes) {
+    throw new Error("영상 용량이 아직 큽니다. 20초 이하로 자르거나 화질을 낮춘 영상으로 다시 올려주세요.");
+  }
+
+  return compressed;
+}
+
+async function transcodeVideoForAnalysis(video: HTMLVideoElement, duration: number, originalName: string) {
+  const mimeType = pickRecordingMimeType();
+
+  if (!mimeType) {
+    throw new Error("이 브라우저에서는 큰 영상을 분석용으로 압축할 수 없습니다. 영상을 짧게 잘라 다시 올려주세요.");
+  }
+
+  const sourceWidth = video.videoWidth || 720;
+  const sourceHeight = video.videoHeight || 1280;
+  const maxDimension = 360;
+  const scale = Math.min(1, maxDimension / Math.max(sourceWidth, sourceHeight));
+  const width = Math.max(2, Math.round(sourceWidth * scale));
+  const height = Math.max(2, Math.round(sourceHeight * scale));
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    throw new Error("분석용 영상을 준비하지 못했습니다.");
+  }
+
+  canvas.width = width;
+  canvas.height = height;
+
+  const stream = canvas.captureStream(12);
+  const recorder = new MediaRecorder(stream, {
+    mimeType,
+    videoBitsPerSecond: 520_000,
+  });
+  const chunks: BlobPart[] = [];
+  const originalState = {
+    currentTime: video.currentTime,
+    muted: video.muted,
+    playbackRate: video.playbackRate,
+    paused: video.paused,
+  };
+
+  return new Promise<File>((resolve, reject) => {
+    let animationId = 0;
+    let finished = false;
+    const maxDuration = Math.min(Math.max(duration, 1), 24);
+    const timeoutId = window.setTimeout(() => finish(new Error("분석용 영상 준비 시간이 초과되었습니다.")), (maxDuration + 6) * 1000);
+
+    const cleanup = () => {
+      window.clearTimeout(timeoutId);
+      window.cancelAnimationFrame(animationId);
+      video.removeEventListener("ended", handleEnded);
+      stream.getTracks().forEach((track) => track.stop());
+      video.muted = originalState.muted;
+      video.playbackRate = originalState.playbackRate;
+
+      if (originalState.paused) {
+        video.pause();
+      }
+
+      video.currentTime = Math.min(originalState.currentTime, Math.max(video.duration - 0.1, 0));
+    };
+
+    const finish = (error?: Error) => {
+      if (finished) {
+        return;
+      }
+
+      finished = true;
+
+      if (error) {
+        cleanup();
+        reject(error);
+        return;
+      }
+
+      if (recorder.state !== "inactive") {
+        recorder.stop();
+      }
+    };
+
+    const draw = () => {
+      context.drawImage(video, 0, 0, width, height);
+
+      if (video.currentTime >= maxDuration || video.ended) {
+        finish();
+        return;
+      }
+
+      animationId = window.requestAnimationFrame(draw);
+    };
+
+    const handleEnded = () => finish();
+
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        chunks.push(event.data);
+      }
+    };
+    recorder.onerror = () => finish(new Error("분석용 영상 압축에 실패했습니다."));
+    recorder.onstop = () => {
+      cleanup();
+      const blob = new Blob(chunks, { type: mimeType });
+      const safeName = originalName.replace(/\.[^.]+$/, "") || "serve-video";
+      resolve(new File([blob], `${safeName}-analysis.webm`, { type: mimeType }));
+    };
+
+    video.addEventListener("ended", handleEnded, { once: true });
+
+    seekVideoFrame(video, 0)
+      .then(() => {
+        video.muted = true;
+        video.playbackRate = 1;
+        recorder.start(250);
+        draw();
+        return video.play();
+      })
+      .catch((error) => finish(error instanceof Error ? error : new Error("분석용 영상을 재생하지 못했습니다.")));
+  });
+}
+
+function pickRecordingMimeType() {
+  const candidates = ["video/webm;codecs=vp8", "video/webm"];
+
+  return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? "";
 }
 
 async function prepareAnalysesForSave(analyses: ServeAnalysis[]) {
