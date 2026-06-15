@@ -372,12 +372,10 @@ export default function Home() {
                   landmarks: undefined,
                 }))
               : { time: moment.time, landmarks: undefined };
-            const frames = poseLandmarker
-              ? await buildSnapshotFrames(video, refinedMoment.time, duration, poseLandmarker, () => {
-                  refinementTimestampMs += 100;
-                  return refinementTimestampMs;
-                }).catch(() => [])
-              : [];
+            const frames = await buildSnapshotFrames(video, refinedMoment.time, duration, poseLandmarker, () => {
+              refinementTimestampMs += 100;
+              return refinementTimestampMs;
+            }).catch(() => []);
             const selectedFrameIndex = findNearestFrameIndex(frames, refinedMoment.time);
             const selectedFrame = selectedFrameIndex >= 0 ? frames[selectedFrameIndex] : undefined;
             const image = selectedFrame?.image ?? (await captureFrame(video, refinedMoment.time, refinedMoment.landmarks));
@@ -1432,7 +1430,7 @@ async function buildSnapshotFrames(
   video: HTMLVideoElement,
   centerTime: number,
   duration: number,
-  landmarker: BrowserPoseLandmarker,
+  landmarker: BrowserPoseLandmarker | null,
   nextTimestampMs: () => number,
 ) {
   const offsets = [-0.5, -0.333, -0.167, 0, 0.167, 0.333, 0.5];
@@ -1444,7 +1442,9 @@ async function buildSnapshotFrames(
   const frames: SnapshotFrame[] = [];
 
   for (const time of uniqueTimes) {
-    const poses = await detectPosesAtTime(video, time, landmarker, nextTimestampMs()).catch(() => undefined);
+    const poses = landmarker
+      ? await detectPosesAtTime(video, time, landmarker, nextTimestampMs()).catch(() => undefined)
+      : undefined;
     const image = await captureFrame(video, time, poses?.[0]);
     frames.push({ image, time });
   }
